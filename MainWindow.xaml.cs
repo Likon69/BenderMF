@@ -1,10 +1,13 @@
 ﻿using Microsoft.Win32;
 using System;
 using System.Configuration;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 
 namespace BenderMF
@@ -153,17 +156,40 @@ namespace BenderMF
                 ExtractIP();
             }
         }
+        private System.Diagnostics.Process process;
+        private StringBuilder output = new StringBuilder();
 
+        private bool botRunning = false;
         private void buttonStart_Click(object sender, RoutedEventArgs e)
         {
             if (string.IsNullOrWhiteSpace(btxPath.Text))
             {
-                MessageBox.Show("Please select the script.");
+                MessageBox.Show("Please select the scripts.");
                 return;
             }
 
             string scriptPath = btxPath.Text;
-            var process = new System.Diagnostics.Process();
+
+            if (botRunning)
+            {
+                if (process != null)
+                {
+                    process.Kill();
+                    process = null;
+                }
+                botRunning = false;
+                ButtonStart.Content = "Start";
+                return;
+            }
+
+            var runningProcesses = Process.GetProcessesByName("node.exe");
+            if (runningProcesses.Length > 0)
+            {
+                MessageBox.Show("A Node process is already running. Please stop it before starting a new one.");
+                return;
+            }
+
+            process = new System.Diagnostics.Process();
             process.StartInfo.FileName = "node.exe";
             process.StartInfo.Arguments = scriptPath;
             process.StartInfo.UseShellExecute = false;
@@ -171,18 +197,62 @@ namespace BenderMF
             process.StartInfo.RedirectStandardError = true;
             process.StartInfo.CreateNoWindow = true;
 
-            StringBuilder output = new StringBuilder();
-            process.OutputDataReceived += (sender2, e2) => output.AppendLine(e2.Data);
-            process.ErrorDataReceived += (sender2, e2) => output.AppendLine(e2.Data);
+            output = new StringBuilder();
 
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
+            process.OutputDataReceived += (sender2, e2) =>
+            {
+                if (!string.IsNullOrEmpty(e2.Data))
+                {
+                    output.AppendLine(e2.Data);
+                    this.Dispatcher.Invoke(() => RichTextBoxLog.AppendText(e2.Data + Environment.NewLine));
+                }
+            };
 
-            process.WaitForExit();
+            process.ErrorDataReceived += (sender2, e2) =>
+            {
+                if (!string.IsNullOrEmpty(e2.Data))
+                {
+                    output.AppendLine(e2.Data);
+                    this.Dispatcher.Invoke(() => RichTextBoxLog.AppendText(e2.Data + Environment.NewLine));
+                }
+            };
 
-            RichTextBoxLog.AppendText(output.ToString() + Environment.NewLine);
+            process.EnableRaisingEvents = true;
+            process.Exited += (sender2, e2) =>
+            {
+                this.Dispatcher.Invoke(() =>
+                {
+                    if (process != null && process.ExitCode != 0)
+                    {
+                        RichTextBoxLog.AppendText($"Process exited with error code {process.ExitCode}." + Environment.NewLine);
+                    }
+                    else
+                    {
+                        RichTextBoxLog.AppendText("Process exited." + Environment.NewLine);
+                    }
+                    botRunning = false;
+                    ButtonStart.Content = "Start";
+                });
+            };
+
+            Task.Run(() =>
+            {
+                process.Start();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+            });
+
+            botRunning = true;
+
+            ButtonStart.Content = "Stop";
+
         }
+
+
+
+
+
+
         private void ButtonHostSave_Click(object sender, EventArgs e)
         {
             string filePath = ConfigurationManager.AppSettings["JavaScriptFilePath"];
